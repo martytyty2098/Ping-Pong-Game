@@ -1,0 +1,308 @@
+static bool game_is_running = true;
+
+struct ButtonState {
+	bool is_down = false;
+	bool changed = false;
+};
+
+enum { BUTTON_UP, BUTTON_DOWN, BUTTON_LEFT, BUTTON_RIGHT, BUTTON_COUNT };
+
+struct input {
+	ButtonState buttons[BUTTON_COUNT];
+};
+
+#include <windows.h>
+#include <cmath>
+
+typedef unsigned int ui32;
+
+#define process_button(b, vk)\
+case vk:\
+input.buttons[b].changed = is_down != input.buttons[b].is_down;\
+input.buttons[b].is_down = is_down;\
+break;
+
+#define pressed(b) input.buttons[b].is_down and input.buttons[b].changed
+#define released(b) (!input.buttons[b].is_down) and input.buttons[b].changed
+#define is_down(b) input.buttons[b].is_down
+
+#define global static
+#define and &&
+#define or ||
+
+struct RENDER_STATE {
+	int buffer_height, buffer_width;
+	void* buffer_memory = nullptr;
+	BITMAPINFO buffer_bitmap_info;
+}global render_state;
+
+class GeometricShape {
+public:
+	virtual void draw() = 0;
+	bool colliderect(GeometricShape& shape);
+	GeometricShape(float spawn_x, float spawn_y, float _width, float _height, ui32 _color);
+	float x, y;
+	float width, height;
+	ui32 color;
+	inline int int_x();
+	inline int int_y();
+	inline int int_height();
+	inline int int_width();
+};
+
+inline int GeometricShape::int_height() {
+	return (int)floor(render_state.buffer_height * height);
+}
+
+inline int GeometricShape::int_width() {
+	return (int)floor(render_state.buffer_width * width);
+}
+
+inline int GeometricShape::int_x() {
+	return (int)floor(render_state.buffer_width * x);
+}
+
+inline int GeometricShape::int_y() {
+	return (int)floor(render_state.buffer_height * y);
+}
+
+bool GeometricShape::colliderect(GeometricShape& shape)
+{
+	int other_x = shape.int_x();
+	int other_y = shape.int_y();
+	int other_width = shape.int_width();
+	int other_height = shape.int_height();
+	for (int temp_y = int_y(); temp_y < int_y() + int_height(); ++temp_y) {
+		for (int temp_x = int_x(); temp_x < int_x() + int_width(); ++temp_x) {
+			if (temp_x >= other_x and temp_x <= other_x + other_width and
+				temp_y >= other_y and temp_y <= other_y + other_height) return true;
+		}
+	}
+	return false;
+}
+
+GeometricShape::GeometricShape(float spawn_x, float spawn_y, float _width, float _height, ui32 _color)
+	:x(spawn_x), y(spawn_y),
+	width(_width), height(_height),
+	color(_color)
+{}
+
+class Rect : public GeometricShape {
+public:
+	Rect(float spawn_x, float spawn_y, float _width, float _height, ui32 _color)
+		: GeometricShape(spawn_x, spawn_y, _width, _height, _color) {};
+	virtual void draw();
+private:
+	Rect();
+};
+
+void Rect::draw()
+{
+	int temp_x = int_x();
+	int temp_y = int_y();
+	ui32* anchor_point = (ui32*)render_state.buffer_memory + render_state.buffer_width * temp_y + temp_x;
+	for (int y0 = 0; y0 < int_height(); ++y0) {
+		if (temp_y + y0 >= render_state.buffer_height or temp_y + y0 < 0) continue;
+		for (int x0 = 0; x0 < int_width(); ++x0) {
+			if (temp_x + x0 >= render_state.buffer_width or temp_x + x0 < 0) continue;
+			*(anchor_point + render_state.buffer_width * y0 + x0) = color;
+		}
+	}
+}
+
+static void fill_screen(ui32 color)
+{
+	ui32* pixel = (ui32*)render_state.buffer_memory;
+	for (int y = 0; y < render_state.buffer_height; ++y) {
+		for (int x = 0; x < render_state.buffer_width; ++x) {
+			*pixel++ = color;
+		}
+	}
+}
+
+static void clear_screen() {
+	fill_screen(0);
+}
+
+#include <ctime>
+
+enum Direction { up_right, down_right, down_left, up_left };
+static void move(Rect& shape, int dir, float speed);
+static void collision(Rect& shape, Rect& player, Rect& enemy, int& dir);
+
+void simulate_game(input& input, float MSPF, bool resizing)
+{
+	srand((unsigned int)time(0));
+	static bool first_frame = true;
+	static bool second_frame = false;
+	static Rect player(0.01f, 0.5f, 0.02f, 0.25f, 0xFFFFFF);
+	static Rect enemy(0.97f, 0.5f, 0.02f, 0.25f, 0XFFFFFF);
+	static Rect ball(0.5f, 0.5f, 0.03f, 0.03f, 0xFFFFFF);
+	static Rect line(0.5f, 0.0f, 0.001f, 1.0f, 0xFFFFFF);
+	static int ball_dir = rand() % 2;
+	float speed_per_second = 1.0f;
+	float player_speed = speed_per_second * MSPF;
+
+	if (second_frame and (is_down(BUTTON_UP) or is_down(BUTTON_DOWN))) second_frame = false;
+	if (second_frame and !resizing) return;
+
+	fill_screen(0);
+	if (is_down(BUTTON_UP) and player.y + player_speed + player.height <= 1.0f) player.y += player_speed;
+	if (is_down(BUTTON_DOWN) and player.y - player_speed >= 0) player.y -= player_speed;
+	collision(ball, player, enemy, ball_dir);
+	move(ball, ball_dir, 1.0f * MSPF);
+
+	if (enemy.y + enemy.height / 2.0f > ball.y + ball.height / 2.0f and enemy.y - player_speed >= 0.0f) enemy.y -= player_speed;
+	if (enemy.y + enemy.height / 2.0f < ball.y + ball.height / 2.0f and enemy.y + player_speed + enemy.height < 1.0f) enemy.y += player_speed;
+
+	player.draw();
+	enemy.draw();
+	ball.draw();
+	line.draw();
+
+	if (first_frame) {
+		first_frame = false;
+		second_frame = true;
+	}
+
+	if (ball.x <= 0.0f or ball.x + ball.width >= 1.0f) game_is_running = false;
+}
+
+static void move(Rect& shape, int dir, float speed)
+{
+	switch (dir) {
+	case up_right:
+		shape.x += speed;
+		shape.y += speed;
+		break;
+	case up_left:
+		shape.y += speed;
+		shape.x -= speed;
+		break;
+	case down_right:
+		shape.x += speed;
+		shape.y -= speed;
+		break;
+	case down_left:
+		shape.y -= speed;
+		shape.x -= speed;
+		break;
+	}
+}
+
+static void collision(Rect& shape, Rect& player, Rect& enemy, int& dir)
+{
+	if (shape.x <= 0.0f or shape.colliderect(player)) {
+		if (dir == down_left) dir = down_right;
+		if (dir == up_left) dir = up_right;
+	}
+	if (shape.y + shape.height >= 1.0f) {
+		if (dir == up_left) dir = down_left;
+		if (dir == up_right) dir = down_right;
+	}
+	if (shape.x + shape.width >= 1.0f or shape.colliderect(enemy)) {
+		if (dir == down_right) dir = down_left;
+		if (dir == up_right) dir = up_left;
+	}
+	if (shape.y <= 0.0f) {
+		if (dir == down_left) dir = up_left;
+		if (dir == down_right) dir = up_right;
+	}
+}
+
+global bool resizing = false;
+
+LRESULT CALLBACK window_callback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg) {
+	case WM_CLOSE:
+	case WM_DESTROY:
+		game_is_running = false;
+		break;
+	case WM_SIZE: 
+	{
+		resizing = true;
+		RECT rect;
+		GetClientRect(hWnd, &rect);
+		render_state.buffer_width = rect.right - rect.left;
+		render_state.buffer_height = rect.bottom - rect.top;
+		int buffer_size = render_state.buffer_width * render_state.buffer_height * sizeof(ui32);
+		if (render_state.buffer_memory) VirtualFree(render_state.buffer_memory, 0, MEM_RELEASE);
+		render_state.buffer_memory = VirtualAlloc(0, buffer_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		render_state.buffer_bitmap_info.bmiHeader.biSize = sizeof(render_state.buffer_bitmap_info.bmiHeader);
+		render_state.buffer_bitmap_info.bmiHeader.biWidth = render_state.buffer_width;
+		render_state.buffer_bitmap_info.bmiHeader.biHeight = render_state.buffer_height;
+		render_state.buffer_bitmap_info.bmiHeader.biPlanes = 1;
+		render_state.buffer_bitmap_info.bmiHeader.biBitCount = 32;
+		render_state.buffer_bitmap_info.bmiHeader.biCompression = BI_RGB;
+	} break;
+	}
+	return DefWindowProc(hWnd, uMsg, wParam, lParam);
+}
+
+int WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
+{
+	WNDCLASS wc = {};
+	wc.style = CS_HREDRAW | CS_VREDRAW;
+	wc.lpszClassName = L"Game Window";
+	wc.lpfnWndProc = window_callback;
+
+	RegisterClass(&wc);
+
+	HWND window = CreateWindow(wc.lpszClassName, L"Pong", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 1280, 720, 0, 0, hInstance, 0); // CW_USEDEFAULT
+	HDC hdc = GetDC(window);
+	input input = {};
+
+	float delta_time = 0.016666f;
+	LARGE_INTEGER frame_begin_time;
+	QueryPerformanceCounter(&frame_begin_time);
+	float performance_frequency;
+	{
+		LARGE_INTEGER perf;
+		QueryPerformanceFrequency(&perf);
+		performance_frequency = (float)perf.QuadPart;
+	}
+
+	while (game_is_running)
+	{
+		MSG message;
+		for (int i = 0; i < BUTTON_COUNT; ++i) input.buttons[i].changed = false;
+
+		while (PeekMessage(&message, window, 0, 0, PM_REMOVE)) 
+		{
+			ui32 vk_code;
+			bool is_down;
+
+			switch (message.message) {
+			case WM_KEYUP:
+			case WM_KEYDOWN:
+				vk_code = (ui32)message.wParam;
+				is_down = ((message.lParam & (1 << 31)) == 0);
+
+				switch (vk_code) {
+					process_button(BUTTON_UP, VK_UP)
+					process_button(BUTTON_DOWN, VK_DOWN)
+					process_button(BUTTON_LEFT, VK_LEFT)
+					process_button(BUTTON_RIGHT, VK_RIGHT)
+				}
+
+				break;
+			default:
+				TranslateMessage(&message);
+				DispatchMessage(&message);
+			}
+		}
+
+		simulate_game(input, delta_time, resizing);
+
+		StretchDIBits(hdc, 0, 0, render_state.buffer_width, render_state.buffer_height, 0, 0, render_state.buffer_width, render_state.buffer_height, render_state.buffer_memory, &render_state.buffer_bitmap_info, DIB_RGB_COLORS, SRCCOPY);
+
+		LARGE_INTEGER frame_end_time;
+		QueryPerformanceCounter(&frame_end_time);
+		delta_time = float((frame_end_time.QuadPart - frame_begin_time.QuadPart) / performance_frequency);
+		if (delta_time > 0.01f) delta_time = 0.01f;
+		frame_begin_time = frame_end_time;
+		resizing = false;
+	}
+	return 0;
+}
